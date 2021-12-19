@@ -32,39 +32,42 @@ calclocation () {
 }
 
 send() {
-    runcmd rsync "$1" "$host":"$path"/"$2"
+    shell mkdir -p "$(dirname "$2")"
+    runcmd rsync -a "$1" "$host":"$path"/"$2"
     }
 
 retrieve() {
-    runcmd rsync "$host":"$path"/"$1" "$2"
+    runcmd rsync -a "$host":"$path"/"$1" "$2"
     }
 
 shell() {
     runcmd ssh "$host" cd "'$path'" \; "$@"
     }
 
-shell-out() {
+shellout() {
     ssh "$host" cd "'$path'" \; "$@"
     }
 
 set -e
+set -x
 
 echo VERSION 1
 
 while read line; do
+    #echo $line >&2
     set -- $line
     case "$1" in
 	LISTCONFIGS)
 	    # One CONFIG line for each setting that we GETCONFIG
 	    # later.
-	    #echo CONFIG directory store data here
+	    echo CONFIG host "host to connect to, 'ssh HOST' must work"
+	    echo CONFIG path "relative (or absolute) path on remote host"
 	    echo CONFIGEND
 	    ;;
 	PREPARE)
 	    # Use GETCONFIG to get configuration settings,
 	    # and do anything needed to get ready for using the
 	    # special remote here.
-	    getcreds
 	    getconfig host ; host="$RET"
 	    getconfig path ; path="$RET"
 	    if [ -z "$host" ]; then
@@ -73,6 +76,18 @@ while read line; do
 		echo PREPARE-FAILURE "path not set"
 	    else
 		echo PREPARE-SUCCESS
+	    fi
+	    ;;
+	INITREMOTE)
+	    getconfig host ; host="$RET"
+	    getconfig path ; path="$RET"
+	    if [ -z "$host" -o -z "$path" ] ; then
+		echo INITREMOTE-FAILURE "You must set host= and path="
+	    fi
+	    if runcmd ssh "$host" "mkdir -p '$path'" ; then
+		echo INITREMOTE-SUCCESS
+	    else
+		echo INITREMOTE-FAILURE "Could not make directory on remote side"
 	    fi
 	    ;;
 	TRANSFER)
@@ -106,12 +121,20 @@ while read line; do
 	CHECKPRESENT)
 	    key="$2"
 	    calclocation "$key" # set $path
-	    runcmd ssh "$host" "test -e \"$path/$loc\""
+	    if shell "test -e '$loc'" ; then
+		echo CHECKPRESENT-SUCCESS "$key"
+	    else
+		echo CHECKPRESENT-FAILURE "$key"
+	    fi
 	    ;;
 	REMOVE)
 	    key="$2"
 	    calclocation "$key" # set $path
-	    runcmd ssh "$host" "rm \"$path/$loc\""
+	    if shell "rm -f '$loc'" ; then
+		echo REMOVE-SUCCESS "$key"
+	    else
+		echo REMOVE-FAILURE "$key"
+	    fi
 	    ;;
 
 
@@ -205,7 +228,7 @@ while read line; do
 	    ;;
 	RETRIEVEEXPORTEXPECTED)
 	    local="$@"
-	    if $(shell-out "stat --format %Y-%i-%s '$loc'") != "$contentid" ; then
+	    if $(shellout "stat --format %Y-%i-%s '$loc'") != "$contentid" ; then
 		echo RETRIEVE-FAILURE "different contentID for '$loc', expected $contentid"
 	    else
 		if retrieve "$loc" "$local" ; then
@@ -219,11 +242,11 @@ while read line; do
 	    key="$2"
 	    shift 2
 	    local="$@"
-	    if ! $(shell "test -e '$loc'") && $(shell-out "stat --format %Y-%i-%s '$loc'") != "$contentid" ; then
+	    if ! $(shell "test -e '$loc'") && $(shellout "stat --format %Y-%i-%s '$loc'") != "$contentid" ; then
 		echo STORE-FAILURE "different contentID for $loc, expected $contentid"
 	    else
 		if store "$local" "$loc" ; then
-		    new_contentid=$(shell-out "stat --format %Y-%i-%s '$loc'")
+		    new_contentid=$(shellout "stat --format %Y-%i-%s '$loc'")
 		    echo "STORE-SUCCESS $key $new_contentid"
 		else
 		    echo "STORE-FAILURE could not retrieve"
@@ -232,7 +255,7 @@ while read line; do
 	    ;;
 	CHECKPRESENTEXPORTEXPECTED)
 	    key="$2"
-	    if $(shell-out "stat --format %Y-%i-%s '$loc'") = "$contentid" ; then
+	    if $(shellout "stat --format %Y-%i-%s '$loc'") = "$contentid" ; then
 		echo CHECKPRESENT-SUCCESS "$key"
 	    else
 		echo CHECKPRESENT-FAILURE "$key"
@@ -240,7 +263,7 @@ while read line; do
 	    ;;
 	REMOVEEXPORTEXPECTED)
 	    key="$2"
-	    if $(shell-out "stat --format %Y-%i-%s '$loc'") = "$contentid" ; then
+	    if $(shellout "stat --format %Y-%i-%s '$loc'") = "$contentid" ; then
 		if shell "rm '$loc'" ; then
 		    echo REMOVE-SUCCESS "$key"
 		else
@@ -263,5 +286,8 @@ while read line; do
 	    false
 	    ;;
 	# end IMPORTKEY section
+	*)
+	    echo UNSUPPORTED-REQUEST
+	    ;;
     esac
 done
