@@ -1,0 +1,267 @@
+#!/bin/sh
+
+runcmd () {
+    # Run command and prevent any stdout
+    "$@" >&2
+}
+
+getconfig () {
+    ask GETCONFIG "$1"
+}
+
+ask () {
+    echo "$1" "$2"
+    read resp
+    # Tricky POSIX shell code to split first word of the resp,
+    # preserving all other whitespace
+    case "${resp%% *}" in
+	VALUE)
+	    RET="$(echo "$resp" | sed 's/^VALUE \?//')"
+	    ;;
+	*)
+	    RET=""
+	    ;;
+    esac
+}
+
+
+# Sets LOC to the location to use to store a key.
+calclocation () {
+    ask DIRHASH "$1"
+    loc="$RET/$1"
+}
+
+send() {
+    runcmd rsync "$1" "$host":"$path"/"$2"
+    }
+
+retrieve() {
+    runcmd rsync "$host":"$path"/"$1" "$2"
+    }
+
+shell() {
+    runcmd ssh "$host" cd "'$path'" \; "$@"
+    }
+
+shell-out() {
+    ssh "$host" cd "'$path'" \; "$@"
+    }
+
+set -e
+
+echo VERSION 1
+
+while read line; do
+    set -- $line
+    case "$1" in
+	LISTCONFIGS)
+	    # One CONFIG line for each setting that we GETCONFIG
+	    # later.
+	    #echo CONFIG directory store data here
+	    echo CONFIGEND
+	    ;;
+	PREPARE)
+	    # Use GETCONFIG to get configuration settings,
+	    # and do anything needed to get ready for using the
+	    # special remote here.
+	    getcreds
+	    getconfig host ; host="$RET"
+	    getconfig path ; path="$RET"
+	    if [ -z "$host" ]; then
+		echo PREPARE-FAILURE "host not set"
+	    elif [ -z "$path" ] ; then
+		echo PREPARE-FAILURE "path not set"
+	    else
+		echo PREPARE-SUCCESS
+	    fi
+	    ;;
+	TRANSFER)
+	    op="$2"
+	    key="$3"
+	    shift 3
+	    local="$@"
+	    case "$op" in
+		STORE)
+		    # Store the file to a location
+		    # based on the key.
+		    calclocation "$key" # sets $path
+		    if send "$local" "$loc"; then
+			echo TRANSFER-SUCCESS STORE "$key"
+		    else
+			echo TRANSFER-FAILURE STORE "$key"
+		    fi
+		    ;;
+		RETRIEVE)
+		    # Retrieve from a location based on
+		    # the key, outputting to the file.
+		    calclocation "$key"
+		    if retrieve "$loc" "$local" ; then
+			echo TRANSFER-SUCCESS RETRIEVE "$key"
+		    else
+			echo TRANSFER-FAILURE RETRIEVE "$key"
+		    fi
+		    ;;
+	    esac
+	    ;;
+	CHECKPRESENT)
+	    key="$2"
+	    calclocation "$key" # set $path
+	    runcmd ssh "$host" "test -e \"$path/$loc\""
+	    ;;
+	REMOVE)
+	    key="$2"
+	    calclocation "$key" # set $path
+	    runcmd ssh "$host" "rm \"$path/$loc\""
+	    ;;
+
+
+	# Import/export interface
+	EXPORTSUPPORTED)
+	    echo EXPORTSUPPORTED-SUCCESS
+	    ;;
+        IMPORTSUPPORTED)
+	    echo IMPORTSUPPORTED-SUCCESS
+	    ;;
+
+
+	# Simple exporting interface
+	EXPORT)
+	    shift 1
+	    loc="$@"
+	    # No response to this one; this value is used below.
+	    ;;
+	TRANSFEREXPORT)
+	    # Transfer previously provided name
+	    cmd="$2"
+	    key="$3"
+	    shift 3
+	    local="$@"
+	    case cmd in
+		STORE)
+		    if rsync "$local" "$host":"$path"/"$loc" ; then
+			echo TRANSFER-SUCCESS STORE "$key"
+		    else
+			echo TRANSFER-FAILURE STORE "$key" rsync failure
+		    fi
+		;;
+		RETRIEVE)
+		    if rsync "$host":"$path"/"$loc" "$local" ; then
+			echo TRANSFER-SUCCESS STORE "$key"
+		    else
+			echo TRANSFER-FAILURE STORE "$key" rsync failure
+		    fi
+		;;
+	    esac
+	    ;;
+	CHECKPRESENTEXPORT)
+	    key="$2"
+	    if shell "test -e $loc" ; then
+		echo CHECKPRESENT-SUCCESS "$key"
+	    else
+		echo CHECKPRESENT-FAILURE "$key"
+	    # CHECKPRESENT-UNKNOWN possible too
+	    fi
+	    ;;
+	REMOVEEXPORT)
+	    key="$2"
+	    if shell "rm -f $loc" ; then
+		echo REMOVE-SUCCESS "$key"
+	    else
+		echo REMOVE-FAILURE "$key"
+	    fi
+	    ;;
+	REMOVEEXPORTDIRECTORY)
+	    true
+	    ;;
+	RENAMEEXPORT)
+	    key="$2"
+	    shift 2
+	    newloc="$2"
+	    if shell "mv $loc $newloc" ; then
+		RENAMEEXPORT-SUCCESS "$key"
+	    else
+		RENAMEEXPORT-FAILURE "$key"
+	    fi
+	    ;;
+
+	# Import interface
+	LISTIMPORTABLECONTENTS)
+	    ssh "$host" "cd \"$path\" ; find . -printf 'CONENT %s %p\nCONTENTIDENTIFIER %T@-%i-%s\n' | sed -E 's/(CONTENTIDENTIFIER [0-9]+).[0-9]+(-.*)/\1\2/'"
+	    echo END
+	    ;;
+
+	LOCATION)
+	    # Sets location for all of the following commands
+	    shift 1
+	    loc="$@"
+	    unset nothingexpected
+	    ;;
+	EXPECTED)
+	    contentid="$2"
+	    # stat ./.rdesktop/cache --format='%Y-%i-%s'  # TODO- different
+	    ;;
+	NOTHINGEXPECTED)
+	    nothingexpected=1
+	    ;;
+	RETRIEVEEXPORTEXPECTED)
+	    local="$@"
+	    if $(shell-out "stat --format %Y-%i-%s '$loc'") != "$contentid" ; then
+		echo RETRIEVE-FAILURE "different contentID for '$loc', expected $contentid"
+	    else
+		if retrieve "$loc" "$local" ; then
+		    echo "RETRIEVE-SUCCESS"
+		else
+		    echo "RETRIEVE-FAILURE could not retrieve"
+		fi
+	    fi
+	    ;;
+	STOREEXPORTEXPECTED)
+	    key="$2"
+	    shift 2
+	    local="$@"
+	    if ! $(shell "test -e '$loc'") && $(shell-out "stat --format %Y-%i-%s '$loc'") != "$contentid" ; then
+		echo STORE-FAILURE "different contentID for $loc, expected $contentid"
+	    else
+		if store "$local" "$loc" ; then
+		    new_contentid=$(shell-out "stat --format %Y-%i-%s '$loc'")
+		    echo "STORE-SUCCESS $key $new_contentid"
+		else
+		    echo "STORE-FAILURE could not retrieve"
+		fi
+	    fi
+	    ;;
+	CHECKPRESENTEXPORTEXPECTED)
+	    key="$2"
+	    if $(shell-out "stat --format %Y-%i-%s '$loc'") = "$contentid" ; then
+		echo CHECKPRESENT-SUCCESS "$key"
+	    else
+		echo CHECKPRESENT-FAILURE "$key"
+	    fi
+	    ;;
+	REMOVEEXPORTEXPECTED)
+	    key="$2"
+	    if $(shell-out "stat --format %Y-%i-%s '$loc'") = "$contentid" ; then
+		if shell "rm '$loc'" ; then
+		    echo REMOVE-SUCCESS "$key"
+		else
+		    echo REMOVE-FAILURE "$key"
+		fi
+	    else
+		echo REMOVE-FAILURE "$key contentid does not match expected=$contentid"
+	    fi
+	    ;;
+	REMOVEEXPORTDIRECTORYWHENEMPTY)
+	    echo REMOVEEXPORTDIRECTORY-SUCCESS
+	    ;;
+
+
+	# IMPORTKEY section
+	IMPORTKEYSUPPORTED)
+	    echo IMPORTKEYSUPPORTED-FAILURE
+	    ;;
+	IMPORTKEY)
+	    false
+	    ;;
+	# end IMPORTKEY section
+    esac
+done
