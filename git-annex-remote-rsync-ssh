@@ -1,4 +1,4 @@
-#!/bin/sh
+#!/bin/bash
 
 runcmd () {
     # Run command and prevent any stdout
@@ -40,6 +40,10 @@ retrieve() {
     runcmd rsync -a "$host":"$path"/"$1" "$2"
     }
 
+ispresent() {
+    shell "test -e '$1'"
+    }
+
 shell() {
     runcmd ssh "$host" cd "'$path'" \; "$@"
     }
@@ -48,13 +52,13 @@ shellout() {
     ssh "$host" cd "'$path'" \; "$@"
     }
 
-set -e
+#set -e
 set -x
 
 echo VERSION 1
 
 while read line; do
-    #echo $line >&2
+    #echo =====$line >&2
     set -- $line
     case "$1" in
 	LISTCONFIGS)
@@ -63,6 +67,11 @@ while read line; do
 	    echo CONFIG host "host to connect to, 'ssh HOST' must work"
 	    echo CONFIG path "relative (or absolute) path on remote host"
 	    echo CONFIGEND
+	    ;;
+	INFO)
+	    echo INFOFIELD "hostpath"
+	    echo INFOVALUE "$host"/"$path"
+	    echo INFOEND
 	    ;;
 	PREPARE)
 	    # Use GETCONFIG to get configuration settings,
@@ -99,7 +108,7 @@ while read line; do
 		STORE)
 		    # Store the file to a location
 		    # based on the key.
-		    calclocation "$key" # sets $path
+		    calclocation "$key" # sets $loc
 		    if send "$local" "$loc"; then
 			echo TRANSFER-SUCCESS STORE "$key"
 		    else
@@ -120,8 +129,10 @@ while read line; do
 	    ;;
 	CHECKPRESENT)
 	    key="$2"
-	    calclocation "$key" # set $path
-	    if shell "test -e '$loc'" ; then
+	    calclocation "$key" # set $loc
+	    #x=$(ispresent "$loc")
+	    #echo $? $x >&2
+	    if ispresent "$loc" ; then
 		echo CHECKPRESENT-SUCCESS "$key"
 	    else
 		echo CHECKPRESENT-FAILURE "$key"
@@ -129,22 +140,22 @@ while read line; do
 	    ;;
 	REMOVE)
 	    key="$2"
-	    calclocation "$key" # set $path
+	    calclocation "$key" # set $loc
 	    if shell "rm -f '$loc'" ; then
 		echo REMOVE-SUCCESS "$key"
 	    else
-		echo REMOVE-FAILURE "$key"
+		echo REMOVE-FAILURE "$key" [failure message here]
 	    fi
 	    ;;
 
 
 	# Import/export interface
-	EXPORTSUPPORTED)
-	    echo EXPORTSUPPORTED-SUCCESS
-	    ;;
-        IMPORTSUPPORTED)
-	    echo IMPORTSUPPORTED-SUCCESS
-	    ;;
+	#EXPORTSUPPORTED)
+	#    echo EXPORTSUPPORTED-SUCCESS
+	#    ;;
+        #IMPORTSUPPORTED)
+	#    echo IMPORTSUPPORTED-SUCCESS
+	#    ;;
 
 
 	# Simple exporting interface
@@ -161,24 +172,24 @@ while read line; do
 	    local="$@"
 	    case cmd in
 		STORE)
-		    if rsync "$local" "$host":"$path"/"$loc" ; then
+		    if store "$local" "$loc" ; then
 			echo TRANSFER-SUCCESS STORE "$key"
 		    else
-			echo TRANSFER-FAILURE STORE "$key" rsync failure
+			echo TRANSFER-FAILURE STORE "$key" rsync failure "$local" to "$host":"$path"/"$loc"
 		    fi
 		;;
 		RETRIEVE)
-		    if rsync "$host":"$path"/"$loc" "$local" ; then
-			echo TRANSFER-SUCCESS STORE "$key"
+		    if retrieve "$host":"$path"/"$loc" "$local" ; then
+			echo TRANSFER-SUCCESS RETRIEVE "$key"
 		    else
-			echo TRANSFER-FAILURE STORE "$key" rsync failure
+			echo TRANSFER-FAILURE RETRIEVE "$key" rsync failure "$host":"$path"/"$loc" to "$local"
 		    fi
 		;;
 	    esac
 	    ;;
 	CHECKPRESENTEXPORT)
 	    key="$2"
-	    if shell "test -e $loc" ; then
+	    if ispresent "$loc" ; then
 		echo CHECKPRESENT-SUCCESS "$key"
 	    else
 		echo CHECKPRESENT-FAILURE "$key"
@@ -187,20 +198,26 @@ while read line; do
 	    ;;
 	REMOVEEXPORT)
 	    key="$2"
-	    if shell "rm -f $loc" ; then
+	    if shell "rm -f '$loc'" ; then
 		echo REMOVE-SUCCESS "$key"
 	    else
 		echo REMOVE-FAILURE "$key"
 	    fi
 	    ;;
 	REMOVEEXPORTDIRECTORY)
-	    true
+	    shift 1
+	    dir="$@"
+	    if shell "rm --dir '$dir'" ; then
+		echo REMOVEEXPORTDIRECTORY-SUCCESS
+	    else
+		echo REMOVEEXPORTDIRECTORY-FAILURE
+	    fi
 	    ;;
 	RENAMEEXPORT)
 	    key="$2"
 	    shift 2
 	    newloc="$2"
-	    if shell "mv $loc $newloc" ; then
+	    if shell "mv '$loc' '$newloc'" ; then
 		RENAMEEXPORT-SUCCESS "$key"
 	    else
 		RENAMEEXPORT-FAILURE "$key"
