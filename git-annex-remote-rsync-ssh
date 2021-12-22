@@ -31,6 +31,9 @@ calclocation () {
     loc="$RET/$1"
 }
 
+rsync() { command rsync -e "ssh -o ControlPersist=10 -o ControlMaster=auto -o ControlPath=$control_socket" "$@" ; }
+ssh() { command ssh -o ControlPersist=10 -o ControlMaster=auto -o ControlPath=$control_socket "$@" ; }
+
 send() {
     shell mkdir -p "$(dirname "$2")"
     runcmd rsync -a "$1" "$host":"$path"/"$2"
@@ -69,9 +72,13 @@ while read line; do
 	    echo CONFIG path "relative (or absolute) path on remote host"
 	    echo CONFIGEND
 	    ;;
-	INFO)
+	GETINFO)
 	    echo INFOFIELD "hostpath"
 	    echo INFOVALUE "$host"/"$path"
+	    echo INFOFIELD "ssh-alias"
+	    echo INFOVALUE $(type ssh)
+	    echo INFOFIELD "rsync-alias"
+	    echo INFOVALUE $(type rsync)
 	    echo INFOEND
 	    ;;
 	PREPARE)
@@ -87,6 +94,8 @@ while read line; do
 	    else
 		echo PREPARE-SUCCESS
 	    fi
+	    # TODO: non-predictable (but ssh handles this)
+	    control_socket=/tmp/ssh-mux-garrs-%u-%h-%p
 	    ;;
 	INITREMOTE)
 	    getconfig host ; host="$RET"
