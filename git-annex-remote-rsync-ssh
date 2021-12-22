@@ -45,15 +45,16 @@ ispresent() {
     }
 
 shell() {
-    runcmd ssh "$host" cd "'$path'" \; "$@"
+    # -n: stdin from /dev/null, needed to not mess up the protocol
+    runcmd ssh -n "$host" cd "'$path'" \; "$@"
     }
 
 shellout() {
-    ssh "$host" cd "'$path'" \; "$@"
+    ssh -n "$host" cd "'$path'" \; "$@"
     }
 
-#set -e
-set -x
+set -e
+#set -x
 
 echo VERSION 1
 
@@ -130,8 +131,6 @@ while read line; do
 	CHECKPRESENT)
 	    key="$2"
 	    calclocation "$key" # set $loc
-	    #x=$(ispresent "$loc")
-	    #echo $? $x >&2
 	    if ispresent "$loc" ; then
 		echo CHECKPRESENT-SUCCESS "$key"
 	    else
@@ -150,12 +149,12 @@ while read line; do
 
 
 	# Import/export interface
-	#EXPORTSUPPORTED)
-	#    echo EXPORTSUPPORTED-SUCCESS
-	#    ;;
-        #IMPORTSUPPORTED)
-	#    echo IMPORTSUPPORTED-SUCCESS
-	#    ;;
+	EXPORTSUPPORTED)
+	    echo EXPORTSUPPORTED-SUCCESS
+	    ;;
+        IMPORTSUPPORTED)
+	    echo IMPORTSUPPORTED-SUCCESS
+	    ;;
 
 
 	# Simple exporting interface
